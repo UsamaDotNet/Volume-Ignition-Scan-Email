@@ -129,7 +129,12 @@ jobs:
           # more than half. Raise it to scan fewer, more liquid names.
           CONCURRENCY: '4'
           RATE_MS:     '80'       # ~12 requests/sec
-          MIN_24H_USD: '2000000'  # skip anything under $2M daily volume
+          # Works backwards from USD_MIN: a symbol must be able to PRODUCE a
+          # $100k ignition candle. At $500k/day that candle is ~20% of daily
+          # turnover, which is what an ignition looks like. Set this too high
+          # and only large caps survive — and large caps never spike 20x, so
+          # the scanner goes permanently silent. $2M left just 64 of 526.
+          MIN_24H_USD: '500000'
           # MAX_SYMBOLS: '150'    # uncomment to hard-cap the sweep
 
           # ── Tradeability ─────────────────────────────────────────────────
