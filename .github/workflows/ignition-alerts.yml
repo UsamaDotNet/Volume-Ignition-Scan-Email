@@ -40,6 +40,11 @@ on:
         type: choice
         default: auto
         options: [auto, gate, mexc, okx, bitget, binance-spot, hyperliquid, binance, bybit]
+      aster_only:
+        description: 'Only alert on names also listed on Aster perps'
+        type: choice
+        default: 'true'
+        options: ['true', 'false']
 
 # Never let two scans overlap — a queued run would read stale lockout state.
 concurrency:
@@ -114,9 +119,31 @@ jobs:
 
           # ── Noise control ────────────────────────────────────────────────
           LOCKOUT:     '20'   # bars of silence per symbol after it alerts
-          CONCURRENCY: '6'    # parallel requests — raising this risks a ban
+
+          # ── Rate limiting ────────────────────────────────────────────────
+          # Gate.io lists 1000+ perps. Scanning all of them flat out trips its
+          # rate limiter within seconds, so requests are paced: CONCURRENCY
+          # caps how many are in flight, RATE_MS the gap between starts.
+          # MIN_24H_USD does most of the work though — it drops dead listings
+          # before a single candle is fetched, usually cutting the sweep by
+          # more than half. Raise it to scan fewer, more liquid names.
+          CONCURRENCY: '4'
+          RATE_MS:     '80'       # ~12 requests/sec
+          MIN_24H_USD: '2000000'  # skip anything under $2M daily volume
+          # MAX_SYMBOLS: '150'    # uncomment to hard-cap the sweep
+
+          # ── Tradeability ─────────────────────────────────────────────────
+          # Volume is read from Gate.io because a 20x candle there means the
+          # market really moved. The alert list is then narrowed to names
+          # Aster also lists, so every email is something you can act on.
+          # Fails OPEN: if Aster can't be reached the scan runs unfiltered
+          # and says so in the log, rather than going quiet.
+          ASTER_ONLY: ${{ github.event.inputs.aster_only || 'true' }}
+
           STATE_PATH:  '.state/ignition.json'
-        run: node ignition-scan.mjs
+        run: |
+          mkdir -p .state
+          node ignition-scan.mjs
 
       - name: Save alert state
         # Runs even when the scan fails, so a transient outage can't wipe the
