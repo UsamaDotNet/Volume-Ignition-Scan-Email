@@ -59,6 +59,8 @@ const CFG = {
   asterHost:   process.env.ASTER_HOST || 'https://fapi.asterdex.com',
   maxSymbols:  int(process.env.MAX_SYMBOLS, 0),  // 0 = no cap
   statePath: process.env.STATE_PATH || '.state/ignition.json',
+  logPath:   process.env.LOG_PATH   || 'docs/signals.json',
+  maxLog:    int(process.env.MAX_LOG, 500),
   dryRun:    process.env.DRY_RUN === 'true',
   testEmail: process.env.TEST_EMAIL === 'true',
 };
@@ -547,6 +549,58 @@ async function saveState(p, s) {
   catch (e) { console.warn('state save failed:', e.message); }
 }
 
+// ─────────────────────── SIGNAL LOG ───────────────────────
+// Appends each alert to a JSON file the workflow commits back to the repo,
+// which GitHub Pages then serves as a browsable history. Newest first, and
+// capped so the repo cannot grow without bound.
+async function appendSignals(hits, c, src) {
+  try {
+    let log = { updated: null, signals: [] };
+    try {
+      const parsed = JSON.parse(await readFile(c.logPath, 'utf8'));
+      if (parsed && Array.isArray(parsed.signals)) log = parsed;
+    } catch { /* first run, or a corrupt file we're about to replace */ }
+
+    const rows = hits.map(h => ({
+      ts:     h.barTs,                       // candle open, ms UTC
+      found:  Date.now(),                    // when the scan saw it
+      venue:  src.label,
+      symbol: h.symbol,
+      base:   h.base,
+      tf:     c.tf,
+      mode:   c.mode,
+      ratios: h.ratios.map(r => +r.toFixed(2)),
+      rCum:   +h.rCum.toFixed(1),
+      rLast:  +h.rLast.toFixed(1),
+      pMove:  +h.pMove.toFixed(2),
+      winUsd: Math.round(h.winUsd),
+      lastUsd:Math.round(h.lastUsd),
+      close:  h.close,
+      tv:     src.tvSymbol(h.symbol),
+    }));
+
+    // Guard against a re-run logging the same candle twice
+    const seen = new Set(log.signals.map(s => `${s.symbol}@${s.ts}`));
+    const fresh = rows.filter(r => !seen.has(`${r.symbol}@${r.ts}`));
+
+    log.signals = [...fresh, ...log.signals].slice(0, c.maxLog);
+    log.updated = Date.now();
+    log.config = {
+      tf: c.tf, mode: c.mode, winLen: c.winLen, baseLen: c.baseLen,
+      cumMin: c.cumMin, peakMin: c.peakMin, elevMin: c.elevMin, minElev: c.minElev,
+      expMin: c.expMin, vsPeak: c.vsPeak, moveMin: c.moveMin, usdMin: c.usdMin,
+      min24h: c.min24h, lockBars: c.lockBars, asterOnly: c.asterOnly,
+    };
+
+    await mkdir(dirname(c.logPath), { recursive: true });
+    await writeFile(c.logPath, JSON.stringify(log, null, 1));
+    console.log(`logged ${fresh.length} signal(s) to ${c.logPath} (${log.signals.length} kept)`);
+  } catch (e) {
+    // The log is a convenience. Never let it stop the email going out.
+    console.warn('signal log write failed:', e.message);
+  }
+}
+
 // ─────────────────────────── EMAIL ───────────────────────────
 function fmtNum(v) {
   if (!v || !Number.isFinite(v)) return '0';
@@ -824,6 +878,17 @@ export async function main() {
     throw new Error(`more than half the requests failed (${errors}) — treating this run as unreliable`);
   }
 
+  hits.sort((a, b) => b.rCum - a.rCum);
+
+  // A dry run must change NOTHING. Writing state here would mark these
+  // symbols as already-alerted, and the next live run would stay silent about
+  // them — a rehearsal that quietly cancels the real performance.
+  if (c.dryRun) {
+    console.log(hits.length ? '' : 'no new ignitions');
+    console.log('DRY_RUN — no email, no state written, no signals logged');
+    return;
+  }
+
   // Forget lockouts older than a day so the state file stays small
   const cutoff = Date.now() - 86400e3;
   for (const [k, v] of Object.entries(state.lastSignal)) if (v < cutoff) delete state.lastSignal[k];
@@ -831,8 +896,7 @@ export async function main() {
 
   if (!hits.length) { console.log('no new ignitions'); return; }
 
-  hits.sort((a, b) => b.rCum - a.rCum);
-  if (c.dryRun) { console.log('\nDRY_RUN — email suppressed'); return; }
+  await appendSignals(hits, c, src);
   await sendEmail(hits, c, src.label, src.tvSymbol);
 }
 
