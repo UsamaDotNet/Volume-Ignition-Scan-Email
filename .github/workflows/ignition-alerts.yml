@@ -51,8 +51,9 @@ concurrency:
   group: ignition-scan
   cancel-in-progress: false
 
+# Needed to commit the signal log and lockout state back to the repo.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   scan:
@@ -65,18 +66,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # ── Lockout memory ────────────────────────────────────────────────────
-      # Which symbols already alerted, so the same ignition doesn't email you
-      # every 15 minutes for the rest of the rally. Cache, NOT a commit —
-      # committing state back would retrigger your Cloudflare Pages build.
-      - name: Restore alert state
-        uses: actions/cache/restore@v4
-        with:
-          path: .state
-          key: ignition-state-
-          restore-keys: |
-            ignition-state-
 
       - name: Scan
         env:
@@ -145,16 +134,38 @@ jobs:
           # and says so in the log, rather than going quiet.
           ASTER_ONLY: ${{ github.event.inputs.aster_only || 'true' }}
 
+          # ── Signal log ───────────────────────────────────────────────────
+          # Written on every alert and committed back below, so GitHub Pages
+          # can serve a browsable history at docs/index.html.
           STATE_PATH:  '.state/ignition.json'
+          LOG_PATH:    'docs/signals.json'
+          MAX_LOG:     '500'
         run: |
-          mkdir -p .state
+          mkdir -p .state docs
           node ignition-scan.mjs
 
-      - name: Save alert state
-        # Runs even when the scan fails, so a transient outage can't wipe the
-        # lockout memory and flood you with repeats on the next run.
+      # Lockout state and the signal log both live in the repo rather than in
+      # the Actions cache, which GitHub evicts after 7 days of disuse. A lost
+      # lockout means repeat emails through a rally; a lost log means lost
+      # history. Both now survive by being committed.
+      #
+      # Only commits when something actually changed, so a quiet market
+      # produces no commits at all — not 2,880 empty ones a month.
+      - name: Publish signals
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: .state
-          key: ignition-state-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          if [ -z "$(git status --porcelain docs .state)" ]; then
+            echo "nothing changed — no commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs .state
+          git commit -m "signals: $(date -u '+%Y-%m-%d %H:%MZ')"
+          # Another run may have pushed while this one was scanning.
+          for i in 1 2 3; do
+            git push && exit 0
+            echo "push rejected, rebasing (attempt $i)"
+            git pull --rebase --autostash || true
+          done
+          echo "could not push the signal log — the scan and email still succeeded"
