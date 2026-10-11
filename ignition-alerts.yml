@@ -1,0 +1,117 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  VOLUME IGNITION — server-side email alerts
+#
+#  Save this file at:  .github/workflows/ignition-alerts.yml
+#  Put ignition-scan.mjs at the repo root (same repo).
+#
+#  This runs on GitHub's servers. Your laptop can be shut and your phone off.
+#  It does not touch arb-dashboard.html, watchlist.html, scanner.html or
+#  volume-squeeze.html — those keep working exactly as they do now, and their
+#  browser alerts are unaffected.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: Volume Ignition alerts
+
+on:
+  schedule:
+    # 15m candles close at :00 :15 :30 :45. Scan 3 minutes after each close so
+    # the candle is settled. Deliberately off the hour — GitHub's scheduler is
+    # most congested at :00 and delays runs there.
+    - cron: '3,18,33,48 * * * *'
+
+  # Lets you press "Run workflow" in the Actions tab to test immediately.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Scan and log hits but send no email'
+        type: boolean
+        default: false
+      mode:
+        description: 'Detection mode'
+        type: choice
+        default: flexible
+        options: [flexible, strict]
+      source:
+        description: 'Data source (auto tries Binance, falls back to Bybit)'
+        type: choice
+        default: auto
+        options: [auto, binance, bybit]
+
+# Never let two scans overlap — a queued run would read stale lockout state.
+concurrency:
+  group: ignition-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── Lockout memory ────────────────────────────────────────────────────
+      # Which symbols already alerted, so the same ignition doesn't email you
+      # every 15 minutes for the rest of the rally. Cache, NOT a commit —
+      # committing state back would retrigger your Cloudflare Pages build.
+      - name: Restore alert state
+        uses: actions/cache/restore@v4
+        with:
+          path: .state
+          key: ignition-state-
+          restore-keys: |
+            ignition-state-
+
+      - name: Scan
+        env:
+          # ── Secrets (Settings → Secrets and variables → Actions) ──────────
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_TO:        ${{ secrets.MAIL_TO }}
+          MAIL_FROM:      'Volume Ignition <onboarding@resend.dev>'
+
+          # ── Run control ──────────────────────────────────────────────────
+          SOURCE:  ${{ github.event.inputs.source || 'auto' }}
+          MODE:    ${{ github.event.inputs.mode   || 'flexible' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TF: '15m'
+
+          # ── Structure ────────────────────────────────────────────────────
+          # WINDOW must match the mode:
+          #   flexible → 5  (judges the whole window, tolerates pullbacks)
+          #   strict   → 3  (every candle must climb; OGN only climbed for 3,
+          #                  so a 5-wide strict window rejects it structurally)
+          WINDOW:   '5'
+          BASELINE: '5'
+
+          # ── Thresholds — same numbers as volume-squeeze.html ─────────────
+          CUM_MIN:  '20'      # window total >= 20x baseline
+          PEAK_MIN: '10'      # final candle >= 10x baseline
+          ELEV_MIN: '2'       # a candle is "elevated" at >= 2x
+          MIN_ELEV: '3'       # need >= 3 elevated candles  (flexible only)
+          EXP_MIN:  '2'       # newer half >= 2x older half (flexible only)
+          VS_PEAK:  '0.4'     # final >= 0.4x window peak   (flexible only)
+          STEP_MIN: '1.3'     # each candle >= 1.3x previous (strict only)
+          MOVE_MIN: '4'       # price moved >= 4% across the window
+          USD_MIN:  '200000'  # final candle >= $200k, kills dust markets
+
+          # ── Noise control ────────────────────────────────────────────────
+          LOCKOUT:     '20'   # bars of silence per symbol after it alerts
+          CONCURRENCY: '6'    # parallel requests — raising this risks a ban
+          STATE_PATH:  '.state/ignition.json'
+        run: node ignition-scan.mjs
+
+      - name: Save alert state
+        # Runs even when the scan fails, so a transient outage can't wipe the
+        # lockout memory and flood you with repeats on the next run.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .state
+          key: ignition-state-${{ github.run_id }}-${{ github.run_attempt }}
