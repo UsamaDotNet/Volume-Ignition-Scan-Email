@@ -2,21 +2,26 @@
 /**
  * VOLUME IGNITION — server-side scanner
  *
- * Runs on GitHub Actions on a schedule. Sweeps every USDT perp, applies the
- * same ignition logic as volume-squeeze.html, and emails any new signals.
+ * Runs on GitHub Actions on a schedule. Sweeps every USDT perp on the chosen
+ * venue, applies the same ignition logic as volume-squeeze.html, and emails
+ * any new signals.
  *
  * Nothing here touches a browser. Your laptop can be shut and your phone off —
  * the email is produced by GitHub's servers and waits in your inbox.
  *
  * Zero dependencies. Node 18+ (global fetch).
  *
- * ── DATA SOURCE ───────────────────────────────────────────────────────────
- * Binance geo-blocks US datacenter IPs with HTTP 451, and GitHub's hosted
- * runners are Azure US. So SOURCE=auto tries Binance first and falls back to
- * Bybit linear perps if Binance refuses the runner. The detector measures
- * every candle against that symbol's OWN baseline, so a different exchange's
- * absolute volume changes nothing about what fires — only usdMin is absolute,
- * and USD is USD on either venue.
+ * ── WHY NOT BINANCE ───────────────────────────────────────────────────────
+ * Binance futures returns HTTP 451 to GitHub's runners (Azure US IPs), and
+ * Bybit returns 403 from the same addresses. Both were probed and confirmed
+ * blocked. Gate.io, MEXC, OKX, Bitget, Binance spot and Hyperliquid all
+ * answered, so the scanner reads from those instead.
+ *
+ * This costs nothing in accuracy: the detector measures every candle against
+ * that symbol's OWN baseline, so it is a ratio, and ratios don't care which
+ * venue produced them — or even whether volume is denominated in coins or
+ * contracts, as long as the unit is consistent down the column. Only usdMin
+ * is absolute, and that reads the quote-volume field.
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -44,6 +49,7 @@ const CFG = {
   stepMin:   num(process.env.STEP_MIN,    1.3),  // STRICT mode only: each candle >= x previous
   lockBars:  int(process.env.LOCKOUT,     20),   // bars of silence per symbol after a hit
   concurrency: int(process.env.CONCURRENCY, 6),
+  maxSymbols:  int(process.env.MAX_SYMBOLS, 0),  // 0 = no cap
   statePath: process.env.STATE_PATH || '.state/ignition.json',
   dryRun:    process.env.DRY_RUN === 'true',
   testEmail: process.env.TEST_EMAIL === 'true',
@@ -56,18 +62,26 @@ const MAIL = {
 };
 
 const TF_MS = { '1m':60e3, '5m':300e3, '15m':900e3, '30m':1800e3, '1h':3600e3, '4h':14400e3 };
+const tfMs  = () => TF_MS[CFG.tf] || 900e3;
 
 function num(v, d) { const n = parseFloat(v); return Number.isFinite(n) ? n : d; }
 function int(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ─────────────────────────── HTTP ───────────────────────────
-async function req(host, path, tries = 3) {
+async function req(host, path, opts = {}) {
+  const tries = opts.tries ?? 3;
   let lastErr;
   for (let i = 0; i < tries; i++) {
     try {
       const res = await fetch(host + path, {
-        headers: { 'User-Agent': 'volume-ignition-scanner/1.1' },
+        method: opts.method || 'GET',
+        headers: {
+          'User-Agent': 'volume-ignition-scanner/2.0',
+          ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(opts.headers || {}),
+        },
+        body: opts.body,
       });
       if (res.status === 429 || res.status === 418) {
         const wait = 2000 * (i + 1);
@@ -93,19 +107,168 @@ async function req(host, path, tries = 3) {
 }
 
 // ───────────────────── SOURCE ADAPTERS ─────────────────────
-// Each adapter normalises candles to { t, o, c, v, q }:
-//   t = open time ms, o = open, c = close, v = base volume, q = quote (USD) volume
-// Oldest first, newest last, forming candle included (the detector drops it).
+// Each adapter returns candles as { t, o, c, v, q }:
+//   t = open time ms · o = open · c = close · v = volume · q = quote (USD) volume
+//
+// `v` need not be in coins. Contracts are fine — the detector only ever
+// compares a symbol's volume to its own baseline, so the unit cancels. `q`
+// does need to be dollars, since usdMin is an absolute gate; where a venue
+// doesn't publish it, the adapter derives it as v × close.
+//
+// Order and sanity are enforced centrally by normalise(), so an adapter that
+// returns newest-first (OKX does) needs no special handling.
 
-const SOURCES = {
+function normalise(rows) {
+  return (rows || [])
+    .filter(r => r && Number.isFinite(r.t) && r.c > 0 && Number.isFinite(r.v) && r.v >= 0)
+    .sort((a, b) => a.t - b.t);
+}
+
+export const SOURCES = {
+  // ── Confirmed reachable from GitHub runners ──────────────────────────
+  gate: {
+    label: 'Gate.io USDT perps',
+    hosts: ['https://api.gateio.ws'],
+    ping: '/api/v4/futures/usdt/contracts?limit=1',
+    tvSymbol: s => `GATEIO:${s.replace('_', '')}.P`,
+    tfMap: { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'1h','4h':'4h' },
+    async universe(get) {
+      const c = await get('/api/v4/futures/usdt/contracts');
+      return (c || [])
+        .filter(x => x && x.name && /_USDT$/.test(x.name) && !x.in_delisting)
+        .map(x => ({ symbol: x.name, base: x.name.replace(/_USDT$/, '') }));
+    },
+    async candles(get, sym, tf, limit) {
+      const k = await get(`/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=${limit}`, { tries: 2 });
+      // { t (sec), v (size), c, h, l, o, sum (quote volume) } — numbers or strings
+      return normalise((k || []).map(r => {
+        const c = Math.abs(+r.c) || 0, v = Math.abs(+r.v) || 0, sum = Math.abs(+r.sum) || 0;
+        return { t: (+r.t) * 1000, o: Math.abs(+r.o) || 0, c, v, q: sum > 0 ? sum : v * c };
+      }));
+    },
+  },
+
+  mexc: {
+    label: 'MEXC USDT perps',
+    hosts: ['https://contract.mexc.com'],
+    ping: '/api/v1/contract/ping',
+    tvSymbol: s => `MEXC:${s.replace('_', '')}.P`,
+    tfMap: { '1m':'Min1','5m':'Min5','15m':'Min15','30m':'Min30','1h':'Min60','4h':'Hour4' },
+    async universe(get) {
+      const c = await get('/api/v1/contract/detail');
+      return (c.data || [])
+        .filter(x => x && x.symbol && /_USDT$/.test(x.symbol) && (x.state === 0 || x.state === undefined))
+        .map(x => ({ symbol: x.symbol, base: x.symbol.replace(/_USDT$/, '') }));
+    },
+    async candles(get, sym, tf, limit) {
+      const start = Math.floor((Date.now() - (limit + 2) * tfMs()) / 1000);
+      const k = await get(`/api/v1/contract/kline/${sym}?interval=${tf}&start=${start}`, { tries: 2 });
+      // parallel arrays: { time[], open[], close[], high[], low[], vol[], amount[] }
+      const d = k.data || {};
+      const t = d.time || [];
+      return normalise(t.map((ts, i) => {
+        const c = +((d.close || [])[i]) || 0, v = +((d.vol || [])[i]) || 0;
+        const amt = +((d.amount || [])[i]) || 0;
+        return { t: ts * 1000, o: +((d.open || [])[i]) || 0, c, v, q: amt > 0 ? amt : v * c };
+      }));
+    },
+  },
+
+  okx: {
+    label: 'OKX USDT swaps',
+    hosts: ['https://www.okx.com'],
+    ping: '/api/v5/public/time',
+    tvSymbol: s => `OKX:${s.replace('-USDT-SWAP', 'USDT')}.P`,
+    tfMap: { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'1H','4h':'4H' },
+    async universe(get) {
+      const c = await get('/api/v5/public/instruments?instType=SWAP');
+      return (c.data || [])
+        .filter(x => x && x.settleCcy === 'USDT' && x.state === 'live')
+        .map(x => ({ symbol: x.instId, base: x.instId.replace(/-USDT-SWAP$/, '') }));
+    },
+    async candles(get, sym, tf, limit) {
+      const k = await get(`/api/v5/market/candles?instId=${sym}&bar=${tf}&limit=${limit}`, { tries: 2 });
+      // [ts, o, h, l, c, vol(contracts), volCcy(base), volCcyQuote(USD), confirm] — newest first
+      return normalise((k.data || []).map(r => {
+        const c = +r[4] || 0, v = +r[5] || 0;
+        return { t: +r[0], o: +r[1] || 0, c, v, q: (+r[7] || +r[6] || 0) || v * c };
+      }));
+    },
+  },
+
+  bitget: {
+    label: 'Bitget USDT perps',
+    hosts: ['https://api.bitget.com'],
+    ping: '/api/v2/public/time',
+    tvSymbol: s => `BITGET:${s}.P`,
+    tfMap: { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'1H','4h':'4H' },
+    async universe(get) {
+      const c = await get('/api/v2/mix/market/contracts?productType=USDT-FUTURES');
+      return (c.data || [])
+        .filter(x => x && x.symbol)
+        .map(x => ({ symbol: x.symbol, base: x.baseCoin || x.symbol.replace(/USDT$/, '') }));
+    },
+    async candles(get, sym, tf, limit) {
+      const k = await get(`/api/v2/mix/market/candles?symbol=${sym}&productType=USDT-FUTURES&granularity=${tf}&limit=${limit}`, { tries: 2 });
+      // [ts, o, h, l, c, baseVol, quoteVol, ...]
+      return normalise((k.data || []).map(r => {
+        const c = +r[4] || 0, v = +r[5] || 0;
+        return { t: +r[0], o: +r[1] || 0, c, v, q: (+r[6] || 0) || v * c };
+      }));
+    },
+  },
+
+  'binance-spot': {
+    label: 'Binance spot (USDT)',
+    hosts: ['https://data-api.binance.vision'],
+    ping: '/api/v3/ping',
+    tvSymbol: s => `BINANCE:${s}`,
+    tfMap: { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'1h','4h':'4h' },
+    async universe(get) {
+      const i = await get('/api/v3/exchangeInfo');
+      return (i.symbols || [])
+        .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT' && s.isSpotTradingAllowed !== false)
+        .map(s => ({ symbol: s.symbol, base: s.baseAsset }));
+    },
+    async candles(get, sym, tf, limit) {
+      const k = await get(`/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${limit}`, { tries: 2 });
+      return normalise((k || []).map(r => ({ t: +r[0], o: +r[1] || 0, c: +r[4] || 0, v: +r[5] || 0, q: +r[7] || 0 })));
+    },
+  },
+
+  hyperliquid: {
+    label: 'Hyperliquid perps',
+    hosts: ['https://api.hyperliquid.xyz'],
+    ping: '/info',
+    pingOpts: { method: 'POST', body: JSON.stringify({ type: 'meta' }) },
+    tvSymbol: s => `HYPERLIQUID:${s}USD.P`,
+    tfMap: { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'1h','4h':'4h' },
+    async universe(get) {
+      const m = await get('/info', { method: 'POST', body: JSON.stringify({ type: 'meta' }) });
+      return (m.universe || [])
+        .filter(x => x && x.name && !x.isDelisted)
+        .map(x => ({ symbol: x.name, base: x.name }));
+    },
+    async candles(get, sym, tf, limit) {
+      const end = Date.now();
+      const k = await get('/info', { method: 'POST', tries: 2, body: JSON.stringify({
+        type: 'candleSnapshot',
+        req: { coin: sym, interval: tf, startTime: end - (limit + 2) * tfMs(), endTime: end },
+      }) });
+      // [{ t, T, s, i, o, c, h, l, v, n }]
+      return normalise((k || []).map(r => {
+        const c = +r.c || 0, v = +r.v || 0;
+        return { t: +r.t, o: +r.o || 0, c, v, q: v * c };
+      }));
+    },
+  },
+
+  // ── Blocked from GitHub runners, kept for use elsewhere ───────────────
+  // Selectable with SOURCE=binance / SOURCE=bybit on a non-US VPS or a
+  // self-hosted runner. Deliberately excluded from the "auto" chain.
   binance: {
     label: 'Binance USDT perps',
-    hosts: [
-      'https://fapi.binance.com',
-      'https://fapi1.binance.com',
-      'https://fapi2.binance.com',
-      'https://fapi3.binance.com',
-    ],
+    hosts: ['https://fapi.binance.com', 'https://fapi1.binance.com', 'https://fapi2.binance.com'],
     ping: '/fapi/v1/ping',
     tvSymbol: s => `BINANCE:${s}.P`,
     tfMap: { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'1h','4h':'4h' },
@@ -116,12 +279,8 @@ const SOURCES = {
         .map(s => ({ symbol: s.symbol, base: s.baseAsset }));
     },
     async candles(get, sym, tf, limit) {
-      const k = await get(`/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${limit}`, 2);
-      if (!Array.isArray(k)) return [];
-      // [openTime, open, high, low, close, volume, closeTime, quoteAssetVolume, ...]
-      return k.map(r => ({
-        t: +r[0], o: +r[1], c: +r[4], v: +r[5], q: +r[7],
-      }));
+      const k = await get(`/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${limit}`, { tries: 2 });
+      return normalise((k || []).map(r => ({ t: +r[0], o: +r[1] || 0, c: +r[4] || 0, v: +r[5] || 0, q: +r[7] || 0 })));
     },
   },
 
@@ -132,12 +291,11 @@ const SOURCES = {
     tvSymbol: s => `BYBIT:${s}.P`,
     tfMap: { '1m':'1','5m':'5','15m':'15','30m':'30','1h':'60','4h':'240' },
     async universe(get) {
-      const out = [];
-      let cursor = '';
+      const out = []; let cursor = '';
       for (let page = 0; page < 6; page++) {
         const qs = `category=linear&limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
         const j = await get(`/v5/market/instruments-info?${qs}`);
-        if (j.retCode !== 0) throw new Error(`bybit instruments retCode ${j.retCode} ${j.retMsg || ''}`);
+        if (j.retCode !== 0) throw new Error(`bybit instruments retCode ${j.retCode}`);
         for (const s of (j.result?.list || [])) {
           if (s.status === 'Trading' && s.quoteCoin === 'USDT' && s.contractType === 'LinearPerpetual') {
             out.push({ symbol: s.symbol, base: s.baseCoin });
@@ -149,37 +307,40 @@ const SOURCES = {
       return out;
     },
     async candles(get, sym, tf, limit) {
-      const j = await get(`/v5/market/kline?category=linear&symbol=${sym}&interval=${tf}&limit=${limit}`, 2);
+      const j = await get(`/v5/market/kline?category=linear&symbol=${sym}&interval=${tf}&limit=${limit}`, { tries: 2 });
       if (j.retCode !== 0) throw new Error(`retCode ${j.retCode}`);
-      const list = j.result?.list || [];
-      // [start, open, high, low, close, volume, turnover] — NEWEST FIRST on Bybit
-      return list.map(r => ({
-        t: +r[0], o: +r[1], c: +r[4], v: +r[5], q: +r[6],
-      })).reverse();
+      // [start, o, h, l, c, volume, turnover] — newest first
+      return normalise((j.result?.list || []).map(r => {
+        const c = +r[4] || 0, v = +r[5] || 0;
+        return { t: +r[0], o: +r[1] || 0, c, v, q: (+r[6] || 0) || v * c };
+      }));
     },
   },
 };
 
-/** Resolve a working source + host, honouring SOURCE=auto|binance|bybit. */
+// Tried in this order when SOURCE=auto. Binance and Bybit are omitted
+// because they are confirmed geo-blocked from GitHub's runners.
+const AUTO_ORDER = ['gate', 'mexc', 'okx', 'bitget', 'binance-spot', 'hyperliquid'];
+
+/** Resolve a working source + host. */
 async function resolveSource(want) {
-  const order = want === 'auto' ? ['binance', 'bybit']
+  const order = want === 'auto' ? AUTO_ORDER
               : SOURCES[want]   ? [want]
               : null;
-  if (!order) throw new Error(`unknown SOURCE "${want}" — use auto, binance or bybit`);
+  if (!order) {
+    throw new Error(`unknown SOURCE "${want}" — use auto, or one of: ${Object.keys(SOURCES).join(', ')}`);
+  }
 
   const notes = [];
   let tfOk = 0;
   for (const name of order) {
     const src = SOURCES[name];
-    if (!src.tfMap[CFG.tf]) {
-      notes.push(`${name}: timeframe ${CFG.tf} not supported`);
-      continue;
-    }
+    if (!src.tfMap[CFG.tf]) { notes.push(`${name}: timeframe ${CFG.tf} not supported`); continue; }
     tfOk++;
     for (const host of src.hosts) {
       try {
-        await req(host, src.ping, 1);
-        const get = (path, tries = 3) => req(host, path, tries);
+        await req(host, src.ping, { tries: 1, ...(src.pingOpts || {}) });
+        const get = (path, opts) => req(host, path, opts);
         console.log(`source: ${src.label} via ${host}`);
         return { name, src, host, get, tf: src.tfMap[CFG.tf] };
       } catch (e) {
@@ -188,8 +349,8 @@ async function resolveSource(want) {
       }
     }
   }
-  // Distinguish "nobody supports this timeframe" from "nobody answered us",
-  // because the fixes are completely different.
+
+  // "Nobody supports this timeframe" and "nobody answered" need different fixes.
   if (tfOk === 0) {
     throw new Error(
       `No data source supports TF="${CFG.tf}".\n  ${notes.join('\n  ')}\n\n` +
@@ -200,8 +361,8 @@ async function resolveSource(want) {
     `No market data host was reachable.\n  ${notes.join('\n  ')}\n\n` +
     (want === 'auto'
       ? 'Every venue refused this runner. If the errors say "restricted location",\n' +
-        'the runner IP is geo-blocked — run this on a self-hosted runner or a non-US VPS instead.'
-      : `Try SOURCE=auto so the scan can fall back to the other venue.`)
+        'the runner IP is geo-blocked — run this on a self-hosted runner or a non-US VPS.'
+      : `Try SOURCE=auto so the scan can fall back to another venue.`)
   );
 }
 
@@ -351,7 +512,10 @@ export function buildEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
 
 async function sendEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
   if (!MAIL.key || !MAIL.to) {
-    console.log('\n(email not configured — set RESEND_API_KEY and MAIL_TO)');
+    console.error('email NOT sent — secrets missing:');
+    console.error(`  RESEND_API_KEY: ${MAIL.key ? 'set' : 'MISSING'}`);
+    console.error(`  MAIL_TO:        ${MAIL.to  ? 'set' : 'MISSING'}`);
+    console.error('  Repo Settings -> Secrets and variables -> Actions. Names are case-sensitive.');
     return false;
   }
   const subject = isTest
@@ -370,11 +534,29 @@ async function sendEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
       html: buildEmail(hits, cfg, srcLabel, tvSymbol, isTest),
     }),
   });
+
+  const body = await res.text();
   if (!res.ok) {
-    console.error('email failed:', res.status, (await res.text()).slice(0, 300));
+    // A bare status code sends you hunting. Name the actual cause.
+    console.error(`email failed: HTTP ${res.status}`);
+    console.error(`  response: ${body.slice(0, 400)}`);
+    if (res.status === 401 || res.status === 403) {
+      console.error('  CAUSE: the RESEND_API_KEY secret is wrong, revoked, or has a stray space.');
+      console.error('         If you deleted the old key in Resend, the secret still holds it —');
+      console.error('         create a new key and UPDATE the secret with it.');
+    } else if (res.status === 422) {
+      console.error('  CAUSE: Resend refused the recipient. The free onboarding@resend.dev sender');
+      console.error('         only delivers to the address your Resend account was created with.');
+      console.error('         Make MAIL_TO exactly that address, or verify your own domain.');
+    } else if (res.status === 429) {
+      console.error('  CAUSE: Resend rate limit — free tier allows 100 emails/day.');
+    }
     return false;
   }
-  console.log(`email sent to ${MAIL.to}`);
+  let id = '';
+  try { id = JSON.parse(body).id || ''; } catch {}
+  console.log(`email accepted by Resend${id ? ` (id ${id})` : ''} -> ${MAIL.to}`);
+  console.log('If it does not arrive, check spam, and check Resend -> Emails for the delivery status.');
   return true;
 }
 
@@ -393,31 +575,49 @@ async function main() {
   if (c.testEmail) {
     console.log('TEST_EMAIL — sending a sample alert, no market data fetched');
     const sample = [
-      { symbol:'OGNUSDT',   base:'OGN',   ratios:[3.2,2.3,19,9.3,46], rCum:80, winUsd:294e6,  pMove:12.4, lastUsd:5.1e6, close:0.02597, elev:3, expand:7.1 },
-      { symbol:'PENGUUSDT', base:'PENGU', ratios:[2.1,4.4,8.8,17,31], rCum:63, winUsd:88.4e6, pMove:7.8,  lastUsd:2.7e6, close:0.0312,  elev:4, expand:4.3 },
+      { symbol:'OGN_USDT',   base:'OGN',   ratios:[3.2,2.3,19,9.3,46], rCum:80, winUsd:294e6,  pMove:12.4 },
+      { symbol:'PENGU_USDT', base:'PENGU', ratios:[2.1,4.4,8.8,17,31], rCum:63, winUsd:88.4e6, pMove:7.8  },
     ];
-    const ok = await sendEmail(sample, c, 'sample data', s => `BINANCE:${s}.P`, true);
-    if (!ok) throw new Error('test email did not send — see the error above');
-    console.log('Check your inbox, and your spam folder if it is not there.');
+    const ok = await sendEmail(sample, c, 'sample data', s => `GATEIO:${s.replace('_', '')}.P`, true);
+    if (!ok) throw new Error('test email did not send — see the cause above');
     return;
   }
 
-  const { src, get, tf } = await resolveSource(c.source);
+  const { name, src, get, tf } = await resolveSource(c.source);
 
-  const universe = await src.universe(get);
+  let universe = await src.universe(get);
   console.log(`universe: ${universe.length} perps`);
   if (!universe.length) throw new Error('empty universe — the exchange returned no tradable perps');
+  if (c.maxSymbols > 0 && universe.length > c.maxSymbols) {
+    universe = universe.slice(0, c.maxSymbols);
+    console.log(`  capped to ${universe.length} (MAX_SYMBOLS)`);
+  }
+
+  const limit = Math.max(c.winLen + c.baseLen + 5, 30);
+
+  // Adapter sanity check. Field names and units differ at every venue, and a
+  // wrong guess reads as zero volume on EVERY symbol — a scan that completes
+  // cleanly and finds nothing, which is indistinguishable from a quiet market.
+  // Fail loudly here instead of reporting silence for weeks.
+  const probe = await src.candles(get, universe[0].symbol, tf, limit);
+  const lastC = probe[probe.length - 1];
+  console.log(`parse check ${universe[0].symbol}: ${probe.length} candles, newest ${JSON.stringify(lastC)}`);
+  if (!probe.length || !lastC || !(lastC.v > 0) || !(lastC.c > 0)) {
+    throw new Error(`the "${name}" adapter parsed no usable price/volume — the venue's response shape has changed`);
+  }
+  if (!(lastC.q > 0)) {
+    console.warn('  WARNING: quote volume is zero, so the USD_MIN gate will reject everything.');
+  }
 
   const state = await loadState(c.statePath);
   state.lastSignal = state.lastSignal || {};
-  const lockMs = c.lockBars * (TF_MS[c.tf] || 900e3);
+  const lockMs = c.lockBars * tfMs();
 
-  const limit = Math.max(c.winLen + c.baseLen + 5, 30);
   const hits = [];
   let scanned = 0, errors = 0;
 
   // Small worker pool — fast enough to finish inside a candle, gentle enough
-  // not to trip the exchange's weight limits.
+  // not to trip the venue's rate limits.
   const queue = universe.slice();
   async function worker() {
     while (queue.length) {
@@ -432,7 +632,7 @@ async function main() {
         if (prev && d.barTs - prev < lockMs) continue;   // still locked out
         state.lastSignal[u.symbol] = d.barTs;
         hits.push({ ...d, symbol: u.symbol, base: u.base });
-        console.log(`  HIT ${u.base.padEnd(12)} ${d.ratios.map(r2s).join(' -> ')}  total ${d.rCum.toFixed(0)}x  ${d.pMove >= 0 ? '+' : ''}${d.pMove.toFixed(1)}%`);
+        console.log(`  HIT ${u.base.padEnd(12)} ${d.ratios.map(r2s).join(' -> ')}  total ${d.rCum.toFixed(0)}x  ${d.pMove >= 0 ? '+' : ''}${d.pMove.toFixed(1)}%  $${fmtNum(d.winUsd)}`);
       } catch (e) {
         errors++;
         if (e.geo) throw e;
@@ -457,10 +657,7 @@ async function main() {
   if (!hits.length) { console.log('no new ignitions'); return; }
 
   hits.sort((a, b) => b.rCum - a.rCum);
-  if (c.dryRun) {
-    console.log('\nDRY_RUN — email suppressed');
-    return;
-  }
+  if (c.dryRun) { console.log('\nDRY_RUN — email suppressed'); return; }
   await sendEmail(hits, c, src.label, src.tvSymbol);
 }
 
