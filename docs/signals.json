@@ -1,0 +1,45 @@
+{
+ "updated": 1791735885921,
+ "signals": [
+  {
+   "ts": 1791734400000,
+   "found": 1791735885921,
+   "venue": "Gate.io USDT perps",
+   "symbol": "BAT_USDT",
+   "base": "BAT",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    5.35,
+    2.01,
+    2.64,
+    31.31,
+    17.66
+   ],
+   "rCum": 59,
+   "rLast": 17.7,
+   "pMove": 13.07,
+   "winUsd": 661765,
+   "lastUsd": 202909,
+   "close": 0.16302,
+   "tv": "GATEIO:BATUSDT.P"
+  }
+ ],
+ "config": {
+  "tf": "15m",
+  "mode": "flexible",
+  "winLen": 5,
+  "baseLen": 5,
+  "cumMin": 20,
+  "peakMin": 10,
+  "elevMin": 2,
+  "minElev": 3,
+  "expMin": 2,
+  "vsPeak": 0.4,
+  "moveMin": 4,
+  "usdMin": 100000,
+  "min24h": 500000,
+  "lockBars": 20,
+  "asterOnly": true
+ }
+}
