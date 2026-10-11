@@ -50,7 +50,11 @@ const CFG = {
   lockBars:  int(process.env.LOCKOUT,     20),   // bars of silence per symbol after a hit
   concurrency: int(process.env.CONCURRENCY, 4),
   rateMs:      int(process.env.RATE_MS,     80), // min ms between request starts
-  min24h:      num(process.env.MIN_24H_USD, 2000000), // skip illiquid listings
+  // Floor works backwards from usdMin: a symbol must be CAPABLE of an
+  // ignition candle worth usdMin. Set this too high and you filter out the
+  // small caps where ignitions actually happen, leaving only large liquid
+  // names whose volume never spikes 20x — a scan that can never fire.
+  min24h:      num(process.env.MIN_24H_USD, 500000),
   asterOnly:   process.env.ASTER_ONLY !== 'false',    // only alert on tradeable names
   asterHost:   process.env.ASTER_HOST || 'https://fapi.asterdex.com',
   maxSymbols:  int(process.env.MAX_SYMBOLS, 0),  // 0 = no cap
@@ -737,8 +741,12 @@ export async function main() {
         if (kept.length === 0) {
           console.warn(`liquidity filter removed everything (${before} symbols) — the 24h volume field looks misread; scanning unfiltered`);
         } else {
-          if (kept.length < before * 0.1) {
-            console.warn(`liquidity filter is aggressive: ${before} -> ${kept.length}. Lower MIN_24H_USD if that looks wrong.`);
+          // Cutting three quarters of the universe is worth flagging: what
+          // survives a high floor is the liquid majors, whose volume never
+          // spikes enough to fire. Too high a floor is a silent scanner.
+          if (kept.length < before * 0.25) {
+            console.warn(`liquidity filter is aggressive: ${before} -> ${kept.length} (${(100 * kept.length / before).toFixed(0)}%).`);
+            console.warn('  A high floor leaves only large caps, which rarely ignite. Consider lowering MIN_24H_USD.');
           }
           universe = kept;
           console.log(`liquidity filter: ${before} -> ${universe.length} with 24h volume >= $${fmtNum(c.min24h)}`);
