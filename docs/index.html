@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Ignition Log</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d1117'/%3E%3Cpath d='M4 11h2V7H4zm3.5 0h2V4h-2zM11 11h2V8h-2z' fill='%23d29922'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#080b10; --panel:#0d1117; --panel2:#111823; --line:#1c2333;
+    --text:#e6edf3; --dim:#8b949e; --faint:#3d4a5c; --ghost:#2a3442;
+    --amber:#d29922; --blue:#58a6ff; --green:#3fb950; --red:#f85149;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
+  body{font-family:var(--sans);-webkit-font-smoothing:antialiased;padding:20px 16px 56px}
+  .wrap{max-width:1040px;margin:0 auto}
+
+  /* ─── header ─── */
+  .eyebrow{font:600 10px var(--mono);letter-spacing:3px;color:var(--amber)}
+  h1{font:700 23px/1.25 var(--sans);margin:7px 0 4px;letter-spacing:-.01em}
+  .meta{font:400 11px var(--mono);color:var(--faint);display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  .dot{color:var(--ghost)}
+  .live{display:inline-flex;align-items:center;gap:5px;color:var(--green)}
+  .live i{width:6px;height:6px;border-radius:50%;background:var(--green);display:block;
+          animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+  /* ─── controls ─── */
+  .bar{display:flex;gap:9px;margin:18px 0 14px;flex-wrap:wrap;align-items:center}
+  input[type=search]{
+    flex:1 1 190px;min-width:0;background:var(--panel);border:1px solid var(--line);
+    border-radius:7px;color:var(--text);font:400 13px var(--mono);padding:9px 11px;outline:none}
+  input[type=search]:focus{border-color:#2d3f5c}
+  input[type=search]::placeholder{color:var(--faint)}
+  .seg{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .seg button{
+    background:none;border:0;color:var(--dim);font:600 11px var(--mono);
+    padding:9px 13px;cursor:pointer;white-space:nowrap}
+  .seg button+button{border-left:1px solid var(--line)}
+  .seg button[aria-pressed=true]{background:var(--panel2);color:var(--amber)}
+
+  /* ─── table ─── */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  table{width:100%;border-collapse:collapse}
+  thead th{
+    background:var(--panel2);text-align:left;padding:9px 12px;
+    font:600 9px var(--mono);letter-spacing:1px;color:var(--faint);text-transform:uppercase;
+    white-space:nowrap;position:sticky;top:0;z-index:1}
+  tbody td{padding:13px 12px;border-top:1px solid var(--line);vertical-align:middle}
+  tbody tr:hover{background:#0f1620}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+
+  .sym{font:700 15px var(--mono);color:var(--text);text-decoration:none}
+  .sym:hover{color:var(--blue);text-decoration:underline}
+  .sub{font:400 10px var(--mono);color:var(--faint);margin-top:3px}
+  .age{font:600 12px var(--mono);color:var(--text);white-space:nowrap}
+  .abs{font:400 10px var(--mono);color:var(--faint);margin-top:3px;white-space:nowrap}
+  .chain{font:400 12px var(--mono);white-space:nowrap}
+  .chain b{font-weight:600}
+  .arrow{color:var(--ghost);padding:0 1px}
+  .tot{font:700 14px var(--mono);color:var(--amber)}
+  .usd{font:400 12px var(--mono);color:#c9d1d9}
+  .mv{font:600 12px var(--mono)}
+  .up{color:var(--green)} .dn{color:var(--red)}
+
+  /* ─── states ─── */
+  .state{padding:52px 24px;text-align:center}
+  .state h2{font:600 15px var(--sans);margin:0 0 8px;color:var(--dim)}
+  .state p{font:400 12px/1.7 var(--mono);color:var(--faint);margin:0 auto;max-width:430px}
+  .state code{color:var(--dim)}
+  .foot{margin-top:15px;font:400 10px/1.7 var(--mono);color:var(--faint)}
+  .foot b{color:var(--dim);font-weight:400}
+
+  /* ─── mobile: one signal per compact block ─── */
+  @media (max-width:720px){
+    body{padding:16px 12px 48px}
+    h1{font-size:19px}
+    thead{display:none}
+    tbody td{display:block;padding:0;border:0}
+    /* Three explicit columns. Two cells sharing one grid slot silently
+       stack on top of each other, which is how the total ended up printed
+       through the dollar figure. */
+    tbody tr{display:grid;grid-template-columns:auto 1fr auto;gap:2px 12px;
+             padding:12px;border-top:1px solid var(--line)}
+    tbody tr:first-child{border-top:0}
+    td.c-sym  {grid-column:1/3;grid-row:1}
+    td.c-age  {grid-column:3;  grid-row:1;text-align:right}
+    td.c-chain{grid-column:1/-1;grid-row:2;padding-top:8px !important;overflow-x:auto}
+    td.c-tot  {grid-column:1;  grid-row:3;padding-top:8px !important}
+    td.c-usd  {grid-column:2;  grid-row:3;padding-top:8px !important;text-align:left}
+    td.c-mv   {grid-column:3;  grid-row:3;padding-top:8px !important;text-align:right}
+    .abs{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">ARB//IGNITION</div>
+  <h1>Signal log</h1>
+  <div class="meta" id="meta">
+    <span class="live"><i></i>loading</span>
+  </div>
+
+  <div class="bar">
+    <input type="search" id="q" placeholder="filter by symbol…" autocomplete="off" spellcheck="false">
+    <div class="seg" id="range" role="group" aria-label="Time range">
+      <button data-h="24"  aria-pressed="false">24h</button>
+      <button data-h="168" aria-pressed="true">7d</button>
+      <button data-h="720" aria-pressed="false">30d</button>
+      <button data-h="0"   aria-pressed="false">All</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr>
+        <th>Symbol</th><th>When</th><th>Escalation vs baseline</th>
+        <th class="num">Total</th><th class="num">Window&nbsp;$</th><th class="num">Move</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="state"></div>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+// Signals are written by the scanner on GitHub's servers and committed to
+// this repo. This page only reads them — it never scans anything itself.
+const $ = s => document.querySelector(s);
+let DATA = { signals: [], updated: null, config: null };
+let hours = 168;
+
+const IST = ts => new Date(ts).toLocaleString('en-GB', {
+  timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short',
+  hour: '2-digit', minute: '2-digit', hour12: false });
+
+function age(ts) {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60)    return Math.floor(s) + 's';
+  if (s < 3600)  return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+function usd(v) {
+  if (!v) return '$0';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
+}
+const ratioTxt = r => (r >= 10 ? r.toFixed(0) : r.toFixed(1)) + '×';
+const ratioCol = r => r >= 30 ? 'var(--red)' : r >= 12 ? 'var(--amber)'
+                    : r >= 2  ? 'var(--blue)' : 'var(--ghost)';
+
+// Text from the data file is injected as textContent, never as HTML.
+function cell(cls, nodes) {
+  const td = document.createElement('td');
+  td.className = cls;
+  nodes.forEach(n => td.appendChild(n));
+  return td;
+}
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function render() {
+  const q = $('#q').value.trim().toUpperCase();
+  const cutoff = hours ? Date.now() - hours * 3600e3 : 0;
+  const list = (DATA.signals || [])
+    .filter(s => s && s.ts >= cutoff)
+    .filter(s => !q || (s.base || '').toUpperCase().includes(q) || (s.symbol || '').toUpperCase().includes(q))
+    // Sort here rather than trusting the file. Each scan prepends its hits,
+    // so the file is normally newest-first — but a re-run, a rebase or a
+    // hand-edit can disturb that, and a log showing a 3-day-old signal above
+    // a 20-minute-old one is worse than useless.
+    .sort((a, b) => b.ts - a.ts);
+
+  const tb = $('#rows');
+  tb.textContent = '';
+
+  for (const s of list) {
+    const tr = document.createElement('tr');
+
+    const a = el('a', 'sym', s.base || s.symbol);
+    a.href = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(s.tv || '');
+    a.target = '_blank'; a.rel = 'noopener noreferrer';
+    tr.appendChild(cell('c-sym', [a, el('div', 'sub', (s.symbol || '') + ' · ' + (s.tf || ''))]));
+
+    tr.appendChild(cell('c-age', [el('div', 'age', age(s.ts)), el('div', 'abs', IST(s.ts) + ' IST')]));
+
+    const chain = el('div', 'chain');
+    (s.ratios || []).forEach((r, i) => {
+      if (i) chain.appendChild(el('span', 'arrow', ' → '));
+      const b = el('b', null, ratioTxt(r));
+      b.style.color = ratioCol(r);
+      chain.appendChild(b);
+    });
+    tr.appendChild(cell('c-chain', [chain]));
+
+    tr.appendChild(cell('c-tot num', [el('span', 'tot', Math.round(s.rCum) + '×')]));
+    tr.appendChild(cell('c-usd num', [el('span', 'usd', usd(s.winUsd))]));
+
+    const mv = el('span', 'mv ' + (s.pMove >= 0 ? 'up' : 'dn'),
+                  (s.pMove >= 0 ? '+' : '') + Number(s.pMove).toFixed(1) + '%');
+    tr.appendChild(cell('c-mv num', [mv]));
+
+    tb.appendChild(tr);
+  }
+
+  const st = $('#state');
+  st.textContent = '';
+  if (!list.length) {
+    const total = (DATA.signals || []).length;
+    const box = el('div', 'state');
+    box.appendChild(el('h2', null, total ? 'Nothing in this range' : 'No signals yet'));
+    box.appendChild(el('p', null, total
+      ? 'Widen the range or clear the filter. ' + total + ' signal' + (total > 1 ? 's' : '') + ' recorded in total.'
+      : 'The scanner runs every 15 minutes and writes here only when a token’s volume ignites. '
+      + 'Long quiet stretches are normal — a test this selective should rarely fire.'));
+    st.appendChild(box);
+  }
+
+  const c = DATA.config;
+  $('#foot').textContent = c
+    ? `Window of ${c.winLen} candles against the ${c.baseLen} quiet candles before it · `
+      + `total ≥${c.cumMin}× baseline · final ≥${c.peakMin}× · `
+      + `≥${c.minElev} candles above ${c.elevMin}× · price +${c.moveMin}%+ · `
+      + `${c.lockBars} bars of silence per symbol after a hit`
+      + (c.asterOnly ? ' · Aster-listed names only' : '')
+    : '';
+}
+
+function setMeta(err) {
+  const m = $('#meta');
+  m.textContent = '';
+  if (err) {
+    const s = el('span', null, err);
+    s.style.color = 'var(--red)';
+    m.appendChild(s);
+    return;
+  }
+  const live = el('span', 'live');
+  live.appendChild(el('i'));
+  live.appendChild(document.createTextNode('live'));
+  m.appendChild(live);
+  const bits = [
+    (DATA.signals || []).length + ' signals',
+    DATA.updated ? 'updated ' + age(DATA.updated) + ' ago' : 'never updated',
+    'scans every 15 min',
+  ];
+  bits.forEach(b => {
+    m.appendChild(el('span', 'dot', '·'));
+    m.appendChild(el('span', null, b));
+  });
+}
+
+async function load() {
+  try {
+    // Cache-bust: GitHub Pages caches aggressively and a stale log looks
+    // exactly like a scanner that has stopped finding anything.
+    const r = await fetch('signals.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    DATA = (j && Array.isArray(j.signals)) ? j : { signals: [], updated: null, config: null };
+    setMeta();
+  } catch (e) {
+    // A missing file is the normal state before the first signal is recorded.
+    DATA = { signals: [], updated: null, config: null };
+    setMeta(e.message.includes('404') ? null : 'could not load signals.json — ' + e.message);
+  }
+  render();
+}
+
+$('#q').addEventListener('input', render);
+$('#range').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  hours = +b.dataset.h;
+  [...e.currentTarget.children].forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  render();
+});
+
+load();
+setInterval(load, 60000);          // pick up new commits
+setInterval(() => { if (DATA.signals.length) render(); }, 30000);  // keep ages fresh
+</script>
+</body>
+</html>
