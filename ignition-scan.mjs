@@ -48,7 +48,11 @@ const CFG = {
   usdMin:    num(process.env.USD_MIN,     200000),
   stepMin:   num(process.env.STEP_MIN,    1.3),  // STRICT mode only: each candle >= x previous
   lockBars:  int(process.env.LOCKOUT,     20),   // bars of silence per symbol after a hit
-  concurrency: int(process.env.CONCURRENCY, 6),
+  concurrency: int(process.env.CONCURRENCY, 4),
+  rateMs:      int(process.env.RATE_MS,     80), // min ms between request starts
+  min24h:      num(process.env.MIN_24H_USD, 2000000), // skip illiquid listings
+  asterOnly:   process.env.ASTER_ONLY !== 'false',    // only alert on tradeable names
+  asterHost:   process.env.ASTER_HOST || 'https://fapi.asterdex.com',
   maxSymbols:  int(process.env.MAX_SYMBOLS, 0),  // 0 = no cap
   statePath: process.env.STATE_PATH || '.state/ignition.json',
   dryRun:    process.env.DRY_RUN === 'true',
@@ -69,23 +73,47 @@ function int(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ─────────────────────────── HTTP ───────────────────────────
+// Gate.io lists over a thousand perps. Firing those off as fast as the worker
+// pool can manage trips the venue's rate limiter within seconds, so every
+// request passes through a global minimum-interval gate. Concurrency controls
+// how many are in flight; this controls how fast they START.
+let _nextSlot = 0;
+let rateLimitHits = 0;
+async function throttle() {
+  const gap = CFG.rateMs;
+  if (gap <= 0) return;
+  const now = Date.now();
+  const at = Math.max(now, _nextSlot);
+  _nextSlot = at + gap;
+  if (at > now) await sleep(at - now);
+}
+
 async function req(host, path, opts = {}) {
   const tries = opts.tries ?? 3;
   let lastErr;
   for (let i = 0; i < tries; i++) {
     try {
+      await throttle();
       const res = await fetch(host + path, {
         method: opts.method || 'GET',
         headers: {
-          'User-Agent': 'volume-ignition-scanner/2.0',
+          'User-Agent': 'volume-ignition-scanner/2.1',
           ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
           ...(opts.headers || {}),
         },
         body: opts.body,
       });
       if (res.status === 429 || res.status === 418) {
-        const wait = 2000 * (i + 1);
-        console.warn(`  rate limited (${res.status}), backing off ${wait}ms`);
+        // Record the error BEFORE continuing. Without this, a request that is
+        // rate-limited on every single attempt falls out of the loop with
+        // lastErr still undefined and throws `undefined`, which then explodes
+        // in the caller's `catch (e) { e.geo }`.
+        lastErr = new Error(`rate limited (HTTP ${res.status})`);
+        lastErr.rateLimited = true;
+        rateLimitHits++;
+        const wait = 1500 * Math.pow(2, i) + Math.floor(Math.random() * 400);
+        if (rateLimitHits <= 5) console.warn(`  rate limited (${res.status}), backing off ${wait}ms`);
+        else if (rateLimitHits === 6) console.warn('  (further rate-limit warnings suppressed)');
         await sleep(wait);
         continue;
       }
@@ -99,11 +127,12 @@ async function req(host, path, opts = {}) {
       return await res.json();
     } catch (e) {
       lastErr = e;
-      if (e.geo) throw e;
+      if (e && e.geo) throw e;
       await sleep(400 * (i + 1));
     }
   }
-  throw lastErr;
+  // Never throw undefined — every caller assumes it received an Error.
+  throw lastErr || new Error(`request failed after ${tries} attempts: ${path.slice(0, 60)}`);
 }
 
 // ───────────────────── SOURCE ADAPTERS ─────────────────────
@@ -138,6 +167,16 @@ export const SOURCES = {
         .filter(x => x && x.name && /_USDT$/.test(x.name) && !x.in_delisting)
         .map(x => ({ symbol: x.name, base: x.name.replace(/_USDT$/, '') }));
     },
+    async tickers(get) {
+      const t = await get('/api/v4/futures/usdt/tickers');
+      const m = new Map();
+      for (const x of (t || [])) {
+        if (!x || !x.contract) continue;
+        const q = Math.abs(+x.volume_24h_quote) || Math.abs(+x.volume_24h_settle) || 0;
+        m.set(x.contract, q);
+      }
+      return m;
+    },
     async candles(get, sym, tf, limit) {
       const k = await get(`/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=${limit}`, { tries: 2 });
       // { t (sec), v (size), c, h, l, o, sum (quote volume) } — numbers or strings
@@ -159,6 +198,14 @@ export const SOURCES = {
       return (c.data || [])
         .filter(x => x && x.symbol && /_USDT$/.test(x.symbol) && (x.state === 0 || x.state === undefined))
         .map(x => ({ symbol: x.symbol, base: x.symbol.replace(/_USDT$/, '') }));
+    },
+    async tickers(get) {
+      const t = await get('/api/v1/contract/ticker');
+      const m = new Map();
+      for (const x of (t.data || [])) {
+        if (x && x.symbol) m.set(x.symbol, Math.abs(+x.amount24) || 0);
+      }
+      return m;
     },
     async candles(get, sym, tf, limit) {
       const start = Math.floor((Date.now() - (limit + 2) * tfMs()) / 1000);
@@ -186,6 +233,16 @@ export const SOURCES = {
         .filter(x => x && x.settleCcy === 'USDT' && x.state === 'live')
         .map(x => ({ symbol: x.instId, base: x.instId.replace(/-USDT-SWAP$/, '') }));
     },
+    async tickers(get) {
+      const t = await get('/api/v5/market/tickers?instType=SWAP');
+      const m = new Map();
+      for (const x of (t.data || [])) {
+        if (!x || !x.instId) continue;
+        const last = +x.last || 0;
+        m.set(x.instId, (+x.volCcy24h || 0) * last || (+x.vol24h || 0) * last);
+      }
+      return m;
+    },
     async candles(get, sym, tf, limit) {
       const k = await get(`/api/v5/market/candles?instId=${sym}&bar=${tf}&limit=${limit}`, { tries: 2 });
       // [ts, o, h, l, c, vol(contracts), volCcy(base), volCcyQuote(USD), confirm] — newest first
@@ -207,6 +264,15 @@ export const SOURCES = {
       return (c.data || [])
         .filter(x => x && x.symbol)
         .map(x => ({ symbol: x.symbol, base: x.baseCoin || x.symbol.replace(/USDT$/, '') }));
+    },
+    async tickers(get) {
+      const t = await get('/api/v2/mix/market/tickers?productType=USDT-FUTURES');
+      const m = new Map();
+      for (const x of (t.data || [])) {
+        if (!x || !x.symbol) continue;
+        m.set(x.symbol, Math.abs(+x.usdtVolume) || (Math.abs(+x.baseVolume) || 0) * (+x.lastPr || 0));
+      }
+      return m;
     },
     async candles(get, sym, tf, limit) {
       const k = await get(`/api/v2/mix/market/candles?symbol=${sym}&productType=USDT-FUTURES&granularity=${tf}&limit=${limit}`, { tries: 2 });
@@ -230,6 +296,14 @@ export const SOURCES = {
         .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT' && s.isSpotTradingAllowed !== false)
         .map(s => ({ symbol: s.symbol, base: s.baseAsset }));
     },
+    async tickers(get) {
+      const t = await get('/api/v3/ticker/24hr');
+      const m = new Map();
+      for (const x of (t || [])) {
+        if (x && x.symbol) m.set(x.symbol, Math.abs(+x.quoteVolume) || 0);
+      }
+      return m;
+    },
     async candles(get, sym, tf, limit) {
       const k = await get(`/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${limit}`, { tries: 2 });
       return normalise((k || []).map(r => ({ t: +r[0], o: +r[1] || 0, c: +r[4] || 0, v: +r[5] || 0, q: +r[7] || 0 })));
@@ -248,6 +322,15 @@ export const SOURCES = {
       return (m.universe || [])
         .filter(x => x && x.name && !x.isDelisted)
         .map(x => ({ symbol: x.name, base: x.name }));
+    },
+    async tickers(get) {
+      // [ meta, assetCtxs ] — the two arrays are positionally aligned
+      const r = await get('/info', { method: 'POST', body: JSON.stringify({ type: 'metaAndAssetCtxs' }) });
+      const names = r?.[0]?.universe || [];
+      const ctxs  = r?.[1] || [];
+      const m = new Map();
+      names.forEach((u, i) => { if (u && u.name) m.set(u.name, Math.abs(+ctxs[i]?.dayNtlVlm) || 0); });
+      return m;
     },
     async candles(get, sym, tf, limit) {
       const end = Date.now();
@@ -321,6 +404,28 @@ export const SOURCES = {
 // Tried in this order when SOURCE=auto. Binance and Bybit are omitted
 // because they are confirmed geo-blocked from GitHub's runners.
 const AUTO_ORDER = ['gate', 'mexc', 'okx', 'bitget', 'binance-spot', 'hyperliquid'];
+
+// ───────────────────── ASTER TRADEABILITY FILTER ─────────────────────
+// The volume signal is best read from a liquid venue — a 20x candle on
+// Gate.io means the market genuinely moved. But a signal you cannot trade is
+// just noise at 3am, so the universe is narrowed to names Aster also lists.
+// Aster runs a Binance-compatible API, so this is a single request.
+//
+// Venues spell the same pair differently (OGN_USDT, OGN-USDT-SWAP, OGNUSDT),
+// so matching is done on letters and digits only.
+const normSym = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+async function asterSymbols() {
+  const j = await req(CFG.asterHost, '/fapi/v1/exchangeInfo', { tries: 2 });
+  const out = new Set();
+  for (const s of (j.symbols || [])) {
+    if (!s || !s.symbol) continue;
+    const trading = !s.status || s.status === 'TRADING';
+    const perp    = !s.contractType || s.contractType === 'PERPETUAL';
+    if (trading && perp) out.add(normSym(s.symbol));
+  }
+  return out;
+}
 
 /** Resolve a working source + host. */
 async function resolveSource(want) {
@@ -502,7 +607,9 @@ export function buildEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
 
   <div style="margin-top:16px;padding:12px 14px;background:#0d1117;border:1px solid #1c2333;border-radius:8px;font:400 11px/1.7 ui-monospace,monospace;color:#3d4a5c">
     Window of ${cfg.winLen} candles judged against the ${cfg.baseLen} quiet candles before it. ${rules}
-    Each symbol stays silent for ${cfg.lockBars} bars after a hit.
+    Each symbol stays silent for ${cfg.lockBars} bars after a hit.${cfg.asterOnly
+      ? ' Universe limited to names also listed on Aster perps, so everything here is tradeable there.'
+      : ''}
   </div>
   <div style="margin-top:10px;font:400 10px ui-monospace,monospace;color:#2a3442">
     Signal, not advice. Verify on the chart before acting.
@@ -561,7 +668,7 @@ async function sendEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
 }
 
 // ─────────────────────────── MAIN ───────────────────────────
-async function main() {
+export async function main() {
   const c = CFG;
   if (c.mode !== 'flexible' && c.mode !== 'strict') {
     throw new Error(`unknown MODE "${c.mode}" — use flexible or strict`);
@@ -588,6 +695,60 @@ async function main() {
   let universe = await src.universe(get);
   console.log(`universe: ${universe.length} perps`);
   if (!universe.length) throw new Error('empty universe — the exchange returned no tradable perps');
+
+  // Narrow to names you can actually trade on Aster. Every guard here fails
+  // OPEN — an unreachable Aster or a symbol-shape mismatch scans the full
+  // universe and says so, rather than silently alerting on nothing. Silence
+  // is the one failure mode you would never notice.
+  if (c.asterOnly) {
+    try {
+      const aster = await asterSymbols();
+      const before = universe.length;
+      const kept = aster.size >= 5 ? universe.filter(u => aster.has(normSym(u.symbol))) : [];
+      if (aster.size < 5) {
+        console.warn(`Aster returned only ${aster.size} symbols — ignoring the filter, scanning unfiltered`);
+      } else if (kept.length < 5) {
+        console.warn(`Aster filter matched only ${kept.length} of ${before} — symbol shapes may not line up; scanning unfiltered`);
+      } else {
+        universe = kept;
+        console.log(`Aster filter: ${before} -> ${universe.length} also listed on Aster perps (Aster lists ${aster.size})`);
+      }
+    } catch (e) {
+      console.warn(`Aster filter skipped (${e.message}) — scanning unfiltered.`);
+      console.warn('  If this repeats, Aster may be unreachable from the runner; set ASTER_ONLY=false to stop trying.');
+    }
+  }
+
+  // Drop illiquid listings before fetching a single candle. Gate.io alone
+  // lists over a thousand perps and most are dust that could never clear
+  // USD_MIN anyway — scanning them only burns rate limit. One ticker request
+  // replaces hundreds of pointless candle requests.
+  if (c.min24h > 0 && typeof src.tickers === 'function') {
+    try {
+      const vol = await src.tickers(get);
+      if (vol && vol.size) {
+        const before = universe.length;
+        const kept = universe.filter(u => (vol.get(u.symbol) || 0) >= c.min24h);
+        // Guard against a misread ticker field, which reads as zero volume
+        // everywhere and would silently empty the universe. Judge by what was
+        // REMOVED, not by the absolute count — after the Aster filter a
+        // legitimate universe can be small, and keeping all 7 of 7 is a pass,
+        // not a failure.
+        if (kept.length === 0) {
+          console.warn(`liquidity filter removed everything (${before} symbols) — the 24h volume field looks misread; scanning unfiltered`);
+        } else {
+          if (kept.length < before * 0.1) {
+            console.warn(`liquidity filter is aggressive: ${before} -> ${kept.length}. Lower MIN_24H_USD if that looks wrong.`);
+          }
+          universe = kept;
+          console.log(`liquidity filter: ${before} -> ${universe.length} with 24h volume >= $${fmtNum(c.min24h)}`);
+        }
+      }
+    } catch (e) {
+      console.warn(`liquidity filter skipped (${e.message}) — scanning the full universe`);
+    }
+  }
+
   if (c.maxSymbols > 0 && universe.length > c.maxSymbols) {
     universe = universe.slice(0, c.maxSymbols);
     console.log(`  capped to ${universe.length} (MAX_SYMBOLS)`);
@@ -600,12 +761,16 @@ async function main() {
   // cleanly and finds nothing, which is indistinguishable from a quiet market.
   // Fail loudly here instead of reporting silence for weeks.
   const probe = await src.candles(get, universe[0].symbol, tf, limit);
-  const lastC = probe[probe.length - 1];
-  console.log(`parse check ${universe[0].symbol}: ${probe.length} candles, newest ${JSON.stringify(lastC)}`);
-  if (!probe.length || !lastC || !(lastC.v > 0) || !(lastC.c > 0)) {
-    throw new Error(`the "${name}" adapter parsed no usable price/volume — the venue's response shape has changed`);
+  // Judge the last CLOSED candles, never the forming one. Seconds after a
+  // candle opens it can legitimately show zero volume, and failing on that
+  // would abort a perfectly healthy scan at :00, :15, :30 and :45.
+  const closed = probe.slice(0, -1).slice(-5);
+  const newest = closed[closed.length - 1];
+  console.log(`parse check ${universe[0].symbol}: ${probe.length} candles, newest closed ${JSON.stringify(newest)}`);
+  if (!closed.length || !closed.some(x => x.v > 0 && x.c > 0)) {
+    throw new Error(`the "${name}" adapter parsed no usable price/volume across ${closed.length} closed candles — the venue's response shape has changed`);
   }
-  if (!(lastC.q > 0)) {
+  if (!closed.some(x => x.q > 0)) {
     console.warn('  WARNING: quote volume is zero, so the USD_MIN gate will reject everything.');
   }
 
@@ -635,13 +800,15 @@ async function main() {
         console.log(`  HIT ${u.base.padEnd(12)} ${d.ratios.map(r2s).join(' -> ')}  total ${d.rCum.toFixed(0)}x  ${d.pMove >= 0 ? '+' : ''}${d.pMove.toFixed(1)}%  $${fmtNum(d.winUsd)}`);
       } catch (e) {
         errors++;
-        if (e.geo) throw e;
+        if (e && e.geo) throw e;   // e can be anything a throw site produced
+        if (errors <= 3) console.warn(`  ${u.symbol}: ${e && e.message ? e.message : e}`);
       }
     }
   }
   await Promise.all(Array.from({ length: c.concurrency }, worker));
 
-  console.log(`\nscanned ${scanned}/${universe.length}  errors ${errors}  hits ${hits.length}`);
+  console.log(`\nscanned ${scanned}/${universe.length}  errors ${errors}  hits ${hits.length}` +
+              (rateLimitHits ? `  (rate limited ${rateLimitHits}x — raise RATE_MS if this is high)` : ''));
 
   // A run that mostly failed must not be mistaken for a quiet market, and must
   // not persist a state file built from partial data.
