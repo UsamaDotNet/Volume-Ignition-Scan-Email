@@ -1,0 +1,116 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  HOST PROBE  ·  one-off diagnostic
+#
+#  Save as:  .github/workflows/probe.yml
+#
+#  Binance and Bybit both refused this runner with "restricted location".
+#  Rather than guess which exchange will answer from a GitHub (Azure US) IP,
+#  this asks the runner directly: it requests real 15m candles from a dozen
+#  venues and reports which ones actually return data.
+#
+#  Run it once, paste the log back, then delete this file.
+#  It sends no email, touches no state, and cannot affect the scanner.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: Host probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Probe market data hosts
+        run: |
+          cat > probe.mjs <<'PROBE_EOF'
+          // Probe: which market-data hosts will answer from THIS runner?
+          // Each entry fetches real candles, not just a ping, so a host that answers
+          // but won't serve data is not mistaken for a win.
+          const T = 12000;
+
+          async function hit(name, url, opts = {}, pick) {
+            const started = Date.now();
+            try {
+              const ctl = AbortController ? new AbortController() : null;
+              const timer = setTimeout(() => ctl && ctl.abort(), T);
+              const res = await fetch(url, {
+                method: opts.method || 'GET',
+                headers: { 'User-Agent': 'probe/1.0', ...(opts.headers || {}) },
+                body: opts.body,
+                signal: ctl ? ctl.signal : undefined,
+              });
+              clearTimeout(timer);
+              const ms = Date.now() - started;
+              const txt = (await res.text()).slice(0, 4000);
+              if (!res.ok) {
+                return { name, ok: false, note: `HTTP ${res.status}`, snip: txt.slice(0, 90).replace(/\s+/g, ' '), ms };
+              }
+              let n = null;
+              try { n = pick(JSON.parse(txt)); } catch (e) { n = `parse: ${e.message}`; }
+              return { name, ok: typeof n === 'number' && n > 0, note: `HTTP 200, ${n} candles`, ms };
+            } catch (e) {
+              return { name, ok: false, note: e.name === 'AbortError' ? 'timeout' : e.message, ms: Date.now() - started };
+            }
+          }
+
+          const now = Date.now();
+          const tests = [
+            ['Binance futures', 'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=3',
+              {}, j => j.length],
+            ['Binance spot (.vision)', 'https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=3',
+              {}, j => j.length],
+            ['Bybit linear', 'https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=3',
+              {}, j => j.result?.list?.length],
+            ['OKX swap', 'https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=15m&limit=3',
+              {}, j => j.data?.length],
+            ['Gate.io futures', 'https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=BTC_USDT&interval=15m&limit=3',
+              {}, j => j.length],
+            ['MEXC futures', 'https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min15&start=' + Math.floor((now - 3 * 9e5) / 1000),
+              {}, j => j.data?.time?.length],
+            ['KuCoin futures', 'https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=15&from=' + (now - 5 * 9e5),
+              {}, j => j.data?.length],
+            ['Bitget futures', 'https://api.bitget.com/api/v2/mix/market/candles?symbol=BTCUSDT&productType=USDT-FUTURES&granularity=15m&limit=3',
+              {}, j => j.data?.length],
+            ['Hyperliquid', 'https://api.hyperliquid.xyz/info',
+              { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'candleSnapshot', req: { coin: 'BTC', interval: '15m', startTime: now - 5 * 9e5, endTime: now } }) },
+              j => j.length],
+            ['dYdX v4', 'https://indexer.dydx.trade/v4/candles/perpetualMarkets/BTC-USD?resolution=15MINS&limit=3',
+              {}, j => j.candles?.length],
+            ['Kraken futures', 'https://futures.kraken.com/api/charts/v1/trade/PF_XBTUSD/15m?from=' + Math.floor((now - 5 * 9e5) / 1000),
+              {}, j => j.candles?.length],
+            ['Coinbase', 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900',
+              {}, j => j.length],
+          ];
+
+          console.log('runner egress:');
+          for (const u of ['https://api.ipify.org?format=json', 'https://ipapi.co/json/']) {
+            try {
+              const r = await fetch(u);
+              const j = await r.json();
+              console.log('  ', u.includes('ipify') ? `ip ${j.ip}` : `${j.city}, ${j.region}, ${j.country_name} (${j.org || ''})`);
+            } catch (e) { console.log('  ', u, '->', e.message); }
+          }
+
+          console.log('\nhost probe (real candle requests):');
+          const rows = [];
+          for (const [name, url, opts, pick] of tests) rows.push(await hit(name, url, opts, pick));
+
+          const pad = s => String(s).padEnd(24);
+          for (const r of rows) {
+            console.log(`  ${r.ok ? 'WORKS ' : 'blocked'}  ${pad(r.name)} ${r.note}${r.snip ? '  | ' + r.snip : ''}  (${r.ms}ms)`);
+          }
+          const winners = rows.filter(r => r.ok).map(r => r.name);
+          console.log(`\nUSABLE: ${winners.length ? winners.join(', ') : 'NONE'}`);
+
+          PROBE_EOF
+          node probe.mjs
