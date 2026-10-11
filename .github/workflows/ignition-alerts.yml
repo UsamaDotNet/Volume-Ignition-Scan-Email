@@ -36,10 +36,10 @@ on:
         default: flexible
         options: [flexible, strict]
       source:
-        description: 'Data source (auto tries Binance, falls back to Bybit)'
+        description: 'Data source (auto = gate, then mexc, okx, bitget, binance-spot, hyperliquid)'
         type: choice
         default: auto
-        options: [auto, binance, bybit]
+        options: [auto, gate, mexc, okx, bitget, binance-spot, hyperliquid, binance, bybit]
 
 # Never let two scans overlap — a queued run would read stale lockout state.
 concurrency:
@@ -81,6 +81,9 @@ jobs:
           MAIL_FROM:      'Volume Ignition <onboarding@resend.dev>'
 
           # ── Run control ──────────────────────────────────────────────────
+          # Binance futures (451) and Bybit (403) both geo-block GitHub's
+          # runners — probed and confirmed. "auto" therefore starts at Gate.io,
+          # which has the widest USDT perp listing of the venues that answered.
           SOURCE:     ${{ github.event.inputs.source || 'auto' }}
           MODE:       ${{ github.event.inputs.mode   || 'flexible' }}
           DRY_RUN:    ${{ github.event.inputs.dry_run    || 'false' }}
@@ -104,7 +107,10 @@ jobs:
           VS_PEAK:  '0.4'     # final >= 0.4x window peak   (flexible only)
           STEP_MIN: '1.3'     # each candle >= 1.3x previous (strict only)
           MOVE_MIN: '4'       # price moved >= 4% across the window
-          USD_MIN:  '200000'  # final candle >= $200k, kills dust markets
+          # USD_MIN was derived from Binance perp liquidity. Gate.io lists far
+          # more small caps, where a real ignition can be smaller in dollars,
+          # so this starts lower. Raise it if the emails get noisy.
+          USD_MIN:  '100000'  # final candle >= $100k, kills dust markets
 
           # ── Noise control ────────────────────────────────────────────────
           LOCKOUT:     '20'   # bars of silence per symbol after it alerts
