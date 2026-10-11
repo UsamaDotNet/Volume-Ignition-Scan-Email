@@ -46,6 +46,7 @@ const CFG = {
   concurrency: int(process.env.CONCURRENCY, 6),
   statePath: process.env.STATE_PATH || '.state/ignition.json',
   dryRun:    process.env.DRY_RUN === 'true',
+  testEmail: process.env.TEST_EMAIL === 'true',
 };
 
 const MAIL = {
@@ -286,7 +287,7 @@ function fmtNum(v) {
 }
 const r2s = r => (r >= 10 ? r.toFixed(0) : r.toFixed(1)) + '×';
 
-export function buildEmail(hits, cfg, srcLabel, tvSymbol) {
+export function buildEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
   const ist = new Date(Date.now() + 5.5 * 3600e3).toISOString().replace('T', ' ').slice(0, 16);
   const rows = hits.map(h => {
     const chain = h.ratios.map(r => {
@@ -311,12 +312,20 @@ export function buildEmail(hits, cfg, srcLabel, tvSymbol) {
     ? `Each candle must be &ge;${cfg.stepMin}&times; the one before it, window total &ge;${cfg.cumMin}&times; baseline, final candle &ge;${cfg.peakMin}&times; baseline, price +${cfg.moveMin}%+.`
     : `Needs total &ge;${cfg.cumMin}&times; baseline, final candle &ge;${cfg.peakMin}&times; and &ge;${cfg.vsPeak}&times; the window peak, at least ${cfg.minElev} candles above ${cfg.elevMin}&times;, newer half &ge;${cfg.expMin}&times; older half, price +${cfg.moveMin}%+.`;
 
+  // A test email must be impossible to mistake for a real signal.
+  const banner = isTest ? `
+  <div style="margin-bottom:16px;padding:11px 13px;background:#1c1606;border:1px solid #4a3a08;border-radius:8px;font:600 12px/1.6 ui-monospace,monospace;color:#d29922">
+    TEST EMAIL &middot; the rows below are made-up sample data, not live signals.<br>
+    <span style="font-weight:400;color:#8b7a3a">Receiving this confirms your Resend key, secrets and inbox all work.</span>
+  </div>` : '';
+
   return `<!doctype html><html><body style="margin:0;padding:0;background:#080b10">
 <div style="max-width:680px;margin:0 auto;padding:22px 16px;font-family:-apple-system,Segoe UI,Roboto,sans-serif">
   <div style="font:600 11px ui-monospace,monospace;letter-spacing:3px;color:#d29922">ARB//IGNITION</div>
   <div style="font:700 21px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;color:#e6edf3;margin:8px 0 3px">
-    ${hits.length} volume ignition${hits.length > 1 ? 's' : ''} detected
+    ${isTest ? 'Test email' : `${hits.length} volume ignition${hits.length > 1 ? 's' : ''} detected`}
   </div>
+  ${banner}
   <div style="font:400 11px ui-monospace,monospace;color:#3d4a5c;margin-bottom:18px">${ist} IST &middot; ${srcLabel} &middot; ${cfg.tf} &middot; ${cfg.mode}</div>
 
   <table style="width:100%;border-collapse:collapse;background:#0d1117;border:1px solid #1c2333;border-radius:8px;overflow:hidden">
@@ -340,14 +349,16 @@ export function buildEmail(hits, cfg, srcLabel, tvSymbol) {
 </div></body></html>`;
 }
 
-async function sendEmail(hits, cfg, srcLabel, tvSymbol) {
+async function sendEmail(hits, cfg, srcLabel, tvSymbol, isTest = false) {
   if (!MAIL.key || !MAIL.to) {
     console.log('\n(email not configured — set RESEND_API_KEY and MAIL_TO)');
     return false;
   }
-  const subject = hits.length === 1
-    ? `Ignition: ${hits[0].base}  ${r2s(hits[0].rCum)} vol, ${hits[0].pMove >= 0 ? '+' : ''}${hits[0].pMove.toFixed(1)}%`
-    : `Ignition: ${hits.length} symbols  (${hits.slice(0, 4).map(h => h.base).join(', ')}${hits.length > 4 ? '…' : ''})`;
+  const subject = isTest
+    ? 'TEST — Volume Ignition email is working'
+    : hits.length === 1
+      ? `Ignition: ${hits[0].base}  ${r2s(hits[0].rCum)} vol, ${hits[0].pMove >= 0 ? '+' : ''}${hits[0].pMove.toFixed(1)}%`
+      : `Ignition: ${hits.length} symbols  (${hits.slice(0, 4).map(h => h.base).join(', ')}${hits.length > 4 ? '…' : ''})`;
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -356,7 +367,7 @@ async function sendEmail(hits, cfg, srcLabel, tvSymbol) {
       from: MAIL.from,
       to: MAIL.to.split(',').map(s => s.trim()).filter(Boolean),
       subject,
-      html: buildEmail(hits, cfg, srcLabel, tvSymbol),
+      html: buildEmail(hits, cfg, srcLabel, tvSymbol, isTest),
     }),
   });
   if (!res.ok) {
@@ -374,6 +385,22 @@ async function main() {
     throw new Error(`unknown MODE "${c.mode}" — use flexible or strict`);
   }
   console.log(`Volume Ignition — ${c.tf}, ${c.mode} mode, window ${c.winLen}, baseline ${c.baseLen}`);
+
+  // TEST_EMAIL proves the delivery chain — key, secrets, inbox, spam rules —
+  // without waiting for the market to produce a signal. Deliberately runs
+  // BEFORE any market request, so "is email working" stays a separate
+  // question from "can this runner reach the exchange".
+  if (c.testEmail) {
+    console.log('TEST_EMAIL — sending a sample alert, no market data fetched');
+    const sample = [
+      { symbol:'OGNUSDT',   base:'OGN',   ratios:[3.2,2.3,19,9.3,46], rCum:80, winUsd:294e6,  pMove:12.4, lastUsd:5.1e6, close:0.02597, elev:3, expand:7.1 },
+      { symbol:'PENGUUSDT', base:'PENGU', ratios:[2.1,4.4,8.8,17,31], rCum:63, winUsd:88.4e6, pMove:7.8,  lastUsd:2.7e6, close:0.0312,  elev:4, expand:4.3 },
+    ];
+    const ok = await sendEmail(sample, c, 'sample data', s => `BINANCE:${s}.P`, true);
+    if (!ok) throw new Error('test email did not send — see the error above');
+    console.log('Check your inbox, and your spam folder if it is not there.');
+    return;
+  }
 
   const { src, get, tf } = await resolveSource(c.source);
 

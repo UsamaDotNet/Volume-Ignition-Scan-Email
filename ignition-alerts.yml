@@ -22,6 +22,10 @@ on:
   # Lets you press "Run workflow" in the Actions tab to test immediately.
   workflow_dispatch:
     inputs:
+      test_email:
+        description: 'Send a sample email now (proves delivery works, skips scanning)'
+        type: boolean
+        default: false
       dry_run:
         description: 'Scan and log hits but send no email'
         type: boolean
@@ -77,9 +81,10 @@ jobs:
           MAIL_FROM:      'Volume Ignition <onboarding@resend.dev>'
 
           # ── Run control ──────────────────────────────────────────────────
-          SOURCE:  ${{ github.event.inputs.source || 'auto' }}
-          MODE:    ${{ github.event.inputs.mode   || 'flexible' }}
-          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          SOURCE:     ${{ github.event.inputs.source || 'auto' }}
+          MODE:       ${{ github.event.inputs.mode   || 'flexible' }}
+          DRY_RUN:    ${{ github.event.inputs.dry_run    || 'false' }}
+          TEST_EMAIL: ${{ github.event.inputs.test_email || 'false' }}
           TF: '15m'
 
           # ── Structure ────────────────────────────────────────────────────
