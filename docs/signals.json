@@ -1,6 +1,29 @@
 {
- "updated": 1791735885921,
+ "updated": 1792461958529,
  "signals": [
+  {
+   "ts": 1792460700000,
+   "found": 1792461958529,
+   "venue": "Gate.io USDT perps",
+   "symbol": "UNITREE_USDT",
+   "base": "UNITREE",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    2.3,
+    5.04,
+    5.1,
+    17.77,
+    12.49
+   ],
+   "rCum": 42.7,
+   "rLast": 12.5,
+   "pMove": 5.04,
+   "winUsd": 2623570,
+   "lastUsd": 785415,
+   "close": 75.001,
+   "tv": "GATEIO:UNITREEUSDT.P"
+  },
   {
    "ts": 1791734400000,
    "found": 1791735885921,
