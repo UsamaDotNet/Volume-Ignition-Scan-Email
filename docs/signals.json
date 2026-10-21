@@ -1,6 +1,29 @@
 {
- "updated": 1792587824792,
+ "updated": 1792605728327,
  "signals": [
+  {
+   "ts": 1792604700000,
+   "found": 1792605728327,
+   "venue": "Gate.io USDT perps",
+   "symbol": "PTB_USDT",
+   "base": "PTB",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    1.42,
+    8.71,
+    6.14,
+    7.71,
+    10.09
+   ],
+   "rCum": 34.1,
+   "rLast": 10.1,
+   "pMove": 20.51,
+   "winUsd": 645112,
+   "lastUsd": 207148,
+   "close": 0.0006063,
+   "tv": "GATEIO:PTBUSDT.P"
+  },
   {
    "ts": 1792586700000,
    "found": 1792587824792,
