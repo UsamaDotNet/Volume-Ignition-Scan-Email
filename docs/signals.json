@@ -1,6 +1,29 @@
 {
- "updated": 1792605728327,
+ "updated": 1792833843676,
  "signals": [
+  {
+   "ts": 1792832400000,
+   "found": 1792833843676,
+   "venue": "Gate.io USDT perps",
+   "symbol": "WET_USDT",
+   "base": "WET",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    4.53,
+    6.51,
+    3.22,
+    12.27,
+    65.94
+   ],
+   "rCum": 92.5,
+   "rLast": 65.9,
+   "pMove": 23.38,
+   "winUsd": 223115,
+   "lastUsd": 164634,
+   "close": 0.07013,
+   "tv": "GATEIO:WETUSDT.P"
+  },
   {
    "ts": 1792604700000,
    "found": 1792605728327,
