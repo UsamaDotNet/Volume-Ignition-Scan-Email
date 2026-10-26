@@ -1,6 +1,29 @@
 {
- "updated": 1792833843676,
+ "updated": 1792998071273,
  "signals": [
+  {
+   "ts": 1792997100000,
+   "found": 1792998071273,
+   "venue": "Gate.io USDT perps",
+   "symbol": "DOOD_USDT",
+   "base": "DOOD",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    4.4,
+    8.5,
+    46.66,
+    62.13,
+    60.2
+   ],
+   "rCum": 181.9,
+   "rLast": 60.2,
+   "pMove": 29.5,
+   "winUsd": 1118794,
+   "lastUsd": 389993,
+   "close": 0.001962,
+   "tv": "GATEIO:DOODUSDT.P"
+  },
   {
    "ts": 1792832400000,
    "found": 1792833843676,
