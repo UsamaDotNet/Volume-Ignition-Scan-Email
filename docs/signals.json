@@ -1,6 +1,29 @@
 {
- "updated": 1793087703423,
+ "updated": 1793109259176,
  "signals": [
+  {
+   "ts": 1793107800000,
+   "found": 1793109259176,
+   "venue": "Gate.io USDT perps",
+   "symbol": "NBIS_USDT",
+   "base": "NBIS",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    2.06,
+    2,
+    1.68,
+    1.5,
+    40.61
+   ],
+   "rCum": 47.9,
+   "rLast": 40.6,
+   "pMove": 6.06,
+   "winUsd": 1103024,
+   "lastUsd": 939946,
+   "close": 169.58,
+   "tv": "GATEIO:NBISUSDT.P"
+  },
   {
    "ts": 1793086200000,
    "found": 1793087703423,
