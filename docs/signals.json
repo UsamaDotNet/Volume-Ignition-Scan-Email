@@ -1,6 +1,29 @@
 {
- "updated": 1793067390396,
+ "updated": 1793087703423,
  "signals": [
+  {
+   "ts": 1793086200000,
+   "found": 1793087703423,
+   "venue": "Gate.io USDT perps",
+   "symbol": "NIL_USDT",
+   "base": "NIL",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    0.64,
+    2.34,
+    5.22,
+    15.58,
+    297.9
+   ],
+   "rCum": 321.7,
+   "rLast": 297.9,
+   "pMove": 24.51,
+   "winUsd": 2400335,
+   "lastUsd": 2253876,
+   "close": 0.11048,
+   "tv": "GATEIO:NILUSDT.P"
+  },
   {
    "ts": 1793066400000,
    "found": 1793067390396,
