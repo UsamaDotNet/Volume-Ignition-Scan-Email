@@ -1,6 +1,29 @@
 {
- "updated": 1792998071273,
+ "updated": 1793067390396,
  "signals": [
+  {
+   "ts": 1793066400000,
+   "found": 1793067390396,
+   "venue": "Gate.io USDT perps",
+   "symbol": "ZHIPU_USDT",
+   "base": "ZHIPU",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    2.94,
+    6.72,
+    46.67,
+    38.63,
+    34.28
+   ],
+   "rCum": 129.2,
+   "rLast": 34.3,
+   "pMove": 6.67,
+   "winUsd": 2270513,
+   "lastUsd": 614607,
+   "close": 71.48,
+   "tv": "GATEIO:ZHIPUUSDT.P"
+  },
   {
    "ts": 1792997100000,
    "found": 1792998071273,
