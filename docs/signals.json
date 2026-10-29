@@ -1,6 +1,29 @@
 {
- "updated": 1793294283816,
+ "updated": 1793310631740,
  "signals": [
+  {
+   "ts": 1793309400000,
+   "found": 1793310631739,
+   "venue": "Gate.io USDT perps",
+   "symbol": "TRX_USDT",
+   "base": "TRX",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    8.45,
+    5.41,
+    9.08,
+    17.89,
+    24.26
+   ],
+   "rCum": 65.1,
+   "rLast": 24.3,
+   "pMove": 4.75,
+   "winUsd": 7793710,
+   "lastUsd": 2933235,
+   "close": 0.34699,
+   "tv": "GATEIO:TRXUSDT.P"
+  },
   {
    "ts": 1793293200000,
    "found": 1793294283816,
