@@ -1,6 +1,29 @@
 {
- "updated": 1793109259176,
+ "updated": 1793294283816,
  "signals": [
+  {
+   "ts": 1793293200000,
+   "found": 1793294283816,
+   "venue": "Gate.io USDT perps",
+   "symbol": "PARTI_USDT",
+   "base": "PARTI",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    5.41,
+    1.23,
+    51.76,
+    30.29,
+    20.73
+   ],
+   "rCum": 109.4,
+   "rLast": 20.7,
+   "pMove": 38.18,
+   "winUsd": 1434855,
+   "lastUsd": 296514,
+   "close": 0.04792,
+   "tv": "GATEIO:PARTIUSDT.P"
+  },
   {
    "ts": 1793107800000,
    "found": 1793109259176,
