@@ -1,6 +1,29 @@
 {
- "updated": 1793310631740,
+ "updated": 1793457924927,
  "signals": [
+  {
+   "ts": 1793457000000,
+   "found": 1793457924927,
+   "venue": "Gate.io USDT perps",
+   "symbol": "COW_USDT",
+   "base": "COW",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    0.45,
+    15.83,
+    21.93,
+    24.78,
+    20.19
+   ],
+   "rCum": 83.2,
+   "rLast": 20.2,
+   "pMove": 21.49,
+   "winUsd": 519532,
+   "lastUsd": 125695,
+   "close": 0.147,
+   "tv": "GATEIO:COWUSDT.P"
+  },
   {
    "ts": 1793309400000,
    "found": 1793310631739,
