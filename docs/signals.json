@@ -1,6 +1,29 @@
 {
- "updated": 1793457924927,
+ "updated": 1793720811945,
  "signals": [
+  {
+   "ts": 1793719800000,
+   "found": 1793720811945,
+   "venue": "Gate.io USDT perps",
+   "symbol": "POL_USDT",
+   "base": "POL",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    4.95,
+    11.74,
+    7.54,
+    10.71,
+    16.06
+   ],
+   "rCum": 51,
+   "rLast": 16.1,
+   "pMove": 5.06,
+   "winUsd": 367317,
+   "lastUsd": 117320,
+   "close": 0.09198,
+   "tv": "GATEIO:POLUSDT.P"
+  },
   {
    "ts": 1793457000000,
    "found": 1793457924927,
