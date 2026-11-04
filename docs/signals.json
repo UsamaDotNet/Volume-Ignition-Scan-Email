@@ -1,6 +1,29 @@
 {
- "updated": 1793720811945,
+ "updated": 1793755578664,
  "signals": [
+  {
+   "ts": 1793754000000,
+   "found": 1793755578664,
+   "venue": "Gate.io USDT perps",
+   "symbol": "BMT_USDT",
+   "base": "BMT",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    6.95,
+    8.17,
+    3.62,
+    6.25,
+    24.08
+   ],
+   "rCum": 49.1,
+   "rLast": 24.1,
+   "pMove": 10.47,
+   "winUsd": 718427,
+   "lastUsd": 359329,
+   "close": 0.02859,
+   "tv": "GATEIO:BMTUSDT.P"
+  },
   {
    "ts": 1793719800000,
    "found": 1793720811945,
