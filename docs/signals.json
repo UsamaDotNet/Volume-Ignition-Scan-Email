@@ -1,6 +1,29 @@
 {
- "updated": 1793755578664,
+ "updated": 1793807212451,
  "signals": [
+  {
+   "ts": 1793806200000,
+   "found": 1793807212451,
+   "venue": "Gate.io USDT perps",
+   "symbol": "XLM_USDT",
+   "base": "XLM",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    2.37,
+    4.13,
+    32.17,
+    26.52,
+    18.4
+   ],
+   "rCum": 83.6,
+   "rLast": 18.4,
+   "pMove": 4.22,
+   "winUsd": 2796285,
+   "lastUsd": 616336,
+   "close": 0.16902,
+   "tv": "GATEIO:XLMUSDT.P"
+  },
   {
    "ts": 1793754000000,
    "found": 1793755578664,
