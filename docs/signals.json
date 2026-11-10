@@ -1,6 +1,29 @@
 {
- "updated": 1794151816224,
+ "updated": 1794311246877,
  "signals": [
+  {
+   "ts": 1794310200000,
+   "found": 1794311246877,
+   "venue": "Gate.io USDT perps",
+   "symbol": "CYBER_USDT",
+   "base": "CYBER",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    3.63,
+    2.42,
+    2.52,
+    1.68,
+    51.12
+   ],
+   "rCum": 61.4,
+   "rLast": 51.1,
+   "pMove": 17.74,
+   "winUsd": 143976,
+   "lastUsd": 121421,
+   "close": 0.306,
+   "tv": "GATEIO:CYBERUSDT.P"
+  },
   {
    "ts": 1794150900000,
    "found": 1794151816224,
