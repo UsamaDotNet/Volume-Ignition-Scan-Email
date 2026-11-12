@@ -1,6 +1,29 @@
 {
- "updated": 1794311246877,
+ "updated": 1794503966653,
  "signals": [
+  {
+   "ts": 1794502800000,
+   "found": 1794503966653,
+   "venue": "Gate.io USDT perps",
+   "symbol": "BARD_USDT",
+   "base": "BARD",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    9.77,
+    10.5,
+    570.19,
+    521.26,
+    594.34
+   ],
+   "rCum": 1706.1,
+   "rLast": 594.3,
+   "pMove": 40.41,
+   "winUsd": 1418866,
+   "lastUsd": 537221,
+   "close": 0.1223,
+   "tv": "GATEIO:BARDUSDT.P"
+  },
   {
    "ts": 1794310200000,
    "found": 1794311246877,
