@@ -1,6 +1,29 @@
 {
- "updated": 1794503966653,
+ "updated": 1794627439296,
  "signals": [
+  {
+   "ts": 1794626100000,
+   "found": 1794627439296,
+   "venue": "Gate.io USDT perps",
+   "symbol": "UAI_USDT",
+   "base": "UAI",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    4.23,
+    2.86,
+    0.83,
+    4.47,
+    13.22
+   ],
+   "rCum": 25.6,
+   "rLast": 13.2,
+   "pMove": 15.36,
+   "winUsd": 509145,
+   "lastUsd": 274473,
+   "close": 0.04423,
+   "tv": "GATEIO:UAIUSDT.P"
+  },
   {
    "ts": 1794502800000,
    "found": 1794503966653,
