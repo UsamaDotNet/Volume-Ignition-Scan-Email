@@ -1,6 +1,52 @@
 {
- "updated": 1794627439296,
+ "updated": 1794787087072,
  "signals": [
+  {
+   "ts": 1794785400000,
+   "found": 1794787087072,
+   "venue": "Gate.io USDT perps",
+   "symbol": "MUU_USDT",
+   "base": "MUU",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    0.56,
+    5.07,
+    18.7,
+    16.54,
+    30.44
+   ],
+   "rCum": 71.3,
+   "rLast": 30.4,
+   "pMove": 4.21,
+   "winUsd": 863427,
+   "lastUsd": 373519,
+   "close": 17.32,
+   "tv": "GATEIO:MUUUSDT.P"
+  },
+  {
+   "ts": 1794785400000,
+   "found": 1794787087072,
+   "venue": "Gate.io USDT perps",
+   "symbol": "KORU_USDT",
+   "base": "KORU",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    0.15,
+    3.76,
+    30.2,
+    11.96,
+    15.93
+   ],
+   "rCum": 62,
+   "rLast": 15.9,
+   "pMove": 5.09,
+   "winUsd": 1070033,
+   "lastUsd": 278855,
+   "close": 7.784,
+   "tv": "GATEIO:KORUUSDT.P"
+  },
   {
    "ts": 1794626100000,
    "found": 1794627439296,
