@@ -1,6 +1,29 @@
 {
- "updated": 1794787087072,
+ "updated": 1794924264222,
  "signals": [
+  {
+   "ts": 1794923100000,
+   "found": 1794924264222,
+   "venue": "Gate.io USDT perps",
+   "symbol": "BREV_USDT",
+   "base": "BREV",
+   "tf": "15m",
+   "mode": "flexible",
+   "ratios": [
+    216.53,
+    86.48,
+    205.33,
+    195.52,
+    338.21
+   ],
+   "rCum": 1042.1,
+   "rLast": 338.2,
+   "pMove": 40.23,
+   "winUsd": 1958711,
+   "lastUsd": 692276,
+   "close": 0.084,
+   "tv": "GATEIO:BREVUSDT.P"
+  },
   {
    "ts": 1794785400000,
    "found": 1794787087072,
